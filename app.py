@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta
+
+import MySQLdb
 import bcrypt as bcrypt
 
 from flask import Flask, request, json, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 import jwt
+from sqlalchemy.orm import joinedload
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = "mysql://root:admin@127.0.0.1/flask"
@@ -69,6 +72,20 @@ class BlackJWTList(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     data = db.Column(db.String(200))
 
+
+class Basket(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    id_record = db.Column(db.Integer, nullable=False)
+    id_good = db.Column(db.Integer, nullable=False)
+    id_colour_shoes = db.Column(db.Integer, nullable=False)
+    id_size_shoes = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(20), nullable=False)
+    all_summ = db.Column(db.Integer, nullable=False)
+    id_customer = db.Column(db.Integer, nullable=False)
+
+    def __repr__(self):
+        return self.id_record, self.id_good, self.id_colour_shoes, self.id_size_shoes, self.status, self.all_summ, self.id_customer
+
 @app.route('/signup', methods=['POST'])
 def create_record():
     try:
@@ -79,10 +96,8 @@ def create_record():
 
 
 def create_user(gmail, password, surname):
-    # cod_password = generate_password_hash(password)
     user = User(
         gmail=gmail,
-        # password=cod_password,
         password=bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()),
         username=surname)
     db.session.add_all([user])
@@ -132,6 +147,7 @@ def add_brand():
     db.session.commit()
 
     colours = Colours.query.get(c_id)
+    print(colours)
     names.nam_2.append(colours)
     db.session.commit()
 
@@ -156,7 +172,7 @@ def add_size():
     return str(sizes)
 
 
-@app.route("/del_brand", methods=("POST", "GET"))
+@app.route("/del_brand", methods=["DELETE"])
 def del_from_names():
     del_names_id = request.headers.get("del_names_id")
     id_names = Names.query.get(del_names_id)
@@ -165,7 +181,7 @@ def del_from_names():
     return "Done"
 
 
-@app.route("/del_colour", methods=("POST", "GET"))
+@app.route("/del_colour", methods=["DELETE"])
 def del_from_colours():
     del_colours_id = request.headers.get("del_colours_id")
     id_colours = Colours.query.get(del_colours_id)
@@ -174,7 +190,7 @@ def del_from_colours():
     return "Done"
 
 
-@app.route("/del_size", methods=("POST", "GET"))
+@app.route("/del_size", methods=["DELETE"])
 def del_from_sizes():
     del_size_id = request.headers.get("del_sizes_id")
     id_sizes = Sizes.query.get(del_size_id)
@@ -211,7 +227,7 @@ def update_brands():
     db.session.commit()
     return "Done"
 
-# get
+
 # filter
 # sort
 
@@ -234,28 +250,61 @@ def info_one():
     return jsonify(str(user_dict))
 
 
+def db_con():
+    conn = MySQLdb.connect(host='127.0.0.1',
+                           user='root',
+                           passwd='admin',
+                           db='flask')
+    return conn
+
+
 @app.route("/info_all", methods=["GET"])
 def info_many():
+    filter_value = request.headers.get("filter_value")
+    filter_key = request.headers.get("filter_key")
+
+
+    c = db_con().cursor()
+
     users = Names.query.all()
     user_list = []
 
     for user_id in users:
         user = Names.query.get(user_id.id)
-        students = Names.query.join(Sizes, Names.id == Sizes.id).paginate(page=1, per_page=5, error_out=False)
-        print(students)
-        # for s in user.nam:
-        #     print(s)
-        # size = user.nam.desc()
-        user_size = Sizes.query.get()
-        user_colour = Colours.query.get(user.nam_2)
+        colour_id = "SELECT colours_id FROM choose_shoes_2 WHERE names_id = %s"
+        argum = user_id.id
+        c.execute(colour_id, [str(argum)])
+        find_id = c.fetchall()
+        size_id = "SELECT sizes_id FROM choose_shoes WHERE names_id = %s"
+        argums = user_id.id
+        c.execute(size_id, [argums])
+        find_size_id = c.fetchall()
+        if find_id and find_size_id:
+            user_colour = Colours.query.get(find_id)
+            user_size = Sizes.query.get(find_size_id)
+        else:
+            user_colour = None
+            user_size = None
         user_dict = {"user_id": user.id,
                      "user_name": user.name,
                      "user_description": user.description,
                      "user_prise": user.prise,
+                     "user_size_id": user_size.id if user_size else None,
                      "user_size": user_size,
-                     "user_colour": user_colour}
+                     "user_colour_id": user_colour.id if user_colour else None,
+                     "user_colour": str(user_colour)}
         user_list.append(user_dict)
-    return jsonify(str(user_list))
+    if filter_value and filter_key:
+        try:
+            values = [int(filter_value)]
+            filter_list = [d for d in user_list if d[filter_key] in values]
+            return jsonify(str(filter_list))
+        except:
+            values = [filter_value]
+            filter_list = [d for d in user_list if d[filter_key] in values]
+            return jsonify(str(filter_list))
+    else:
+        return jsonify(str(user_list))
 
 
 if __name__ == "__main__":
