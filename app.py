@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from functools import wraps
+from functools import wraps, reduce
 
 import MySQLdb
 import bcrypt as bcrypt
@@ -258,6 +258,7 @@ def db_con():
 def token_required(f):
     @wraps(f)
     def decorator(*args, **kwargs):
+        c = db_con().cursor()
 
         token = None
 
@@ -266,27 +267,23 @@ def token_required(f):
 
         if not token:
             return jsonify({'message': 'a valid token is missing'})
-
-        # for i in BlackJWTList.query.get(token):
-        #     if token == i['data']:
-        #         return jsonify({'message': 'User is not logged in'})
         if BlackJWTList.query.get(token):
             return jsonify({'message': 'User is not logged in'})
-        data = jwt.decode(token, JWT_SECRET, JWT_ALGORITHM)
-        print(data)
-        current_user = User.query.filter_by(gmail=data['email']).first()
-        print(str(current_user))
-
         try:
             data = jwt.decode(token, JWT_SECRET, JWT_ALGORITHM)
-            current_user = User.query.get(gmail=data['email'])
-
+            user_find_id = "SELECT id FROM user WHERE gmail = %s"
+            argums = data['email']
+            c.execute(user_find_id, [argums])
+            id_find = c.fetchall()
+            current_user = User.query.get(id_find)
         except:
             return jsonify({'message': 'token is invalid'})
 
         return f(current_user, *args, **kwargs)
 
     return decorator
+
+
 @app.route("/info_all", methods=["GET"])
 def info_many():
     filter_value = request.headers.get("filter_value")
@@ -350,7 +347,7 @@ def info_many():
 
 @app.route("/add_to_basket")
 @token_required
-def add_basket():
+def add_basket(current_user):
 
     c = db_con().cursor()
     id_shoes = request.headers.get("id_good")
@@ -374,17 +371,28 @@ def add_basket():
                     status=stat, all_summ=shoes.prise, id_customer=customer)
     db.session.add_all([basket])
     db.session.commit()
-    return str([basket])
+    return 'successfully'
 
 
+@app.route('/change_status')
+def status_change():
+    new_status = request.headers.get("new_status")
+    id_for_change = request.headers.get("id_for_change")
+    basket_status = Basket.query.get(id_for_change)
+    if new_status:
+        basket_status = Basket.query.get(id_for_change)
+        basket_status.status = new_status
+    else:
+        if basket_status.status == "in the basket":
+            del_obj = Basket.query.get(id_for_change)
+            db.session.delete(del_obj)
+            return "success delete "
+        else:
+            return "Your status don`t in the basket"
 
-    # user_dict = {"user_id": user.id,
-    #              "user_name": user.name,
-    #              "user_description": user.description,
-    #              "user_prise": user.prise,
-    #              "user_size": user_size.size,
-    #              "user_colour": user_colour.colour}
-    # return jsonify(str(user_dict))
+    db.session.commit()
+    return new_status
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=3000, host="localhost")
