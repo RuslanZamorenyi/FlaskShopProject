@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta
+from functools import wraps
 
 import MySQLdb
 import bcrypt as bcrypt
-
+import flask_login
 from flask import Flask, request, json, jsonify, make_response
+from flask_login import current_user
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 import jwt
-from sqlalchemy.orm import joinedload
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = "mysql://root:admin@127.0.0.1/flask"
@@ -86,6 +87,7 @@ class Basket(db.Model):
     def __repr__(self):
         return self.id_record, self.id_good, self.id_colour_shoes, self.id_size_shoes, self.status, self.all_summ, self.id_customer
 
+
 @app.route('/signup', methods=['POST'])
 def create_record():
     try:
@@ -147,7 +149,6 @@ def add_brand():
     db.session.commit()
 
     colours = Colours.query.get(c_id)
-    print(colours)
     names.nam_2.append(colours)
     db.session.commit()
 
@@ -199,7 +200,7 @@ def del_from_sizes():
     return "Done"
 
 
-@app.route("/update", methods=("POST", "GET"))
+@app.route("/update", methods=["PUT"])
 def update_brands():
     update_name_id = request.headers.get("update_name_id")
     if not update_name_id:
@@ -228,10 +229,6 @@ def update_brands():
     return "Done"
 
 
-# filter
-# sort
-
-
 @app.route("/info_one", methods=["GET"])
 def info_one():
     get_name_id = request.headers.get("get_name_id")
@@ -258,11 +255,45 @@ def db_con():
     return conn
 
 
+def token_required(f):
+    @wraps(f)
+    def decorator(*args, **kwargs):
+
+        token = None
+
+        if 'x-access-tokens' in request.headers:
+            token = request.headers['x-access-tokens']
+
+        if not token:
+            return jsonify({'message': 'a valid token is missing'})
+
+        # for i in BlackJWTList.query.get(token):
+        #     if token == i['data']:
+        #         return jsonify({'message': 'User is not logged in'})
+        if BlackJWTList.query.get(token):
+            return jsonify({'message': 'User is not logged in'})
+        data = jwt.decode(token, JWT_SECRET, JWT_ALGORITHM)
+        print(data)
+        current_user = User.query.filter_by(gmail=data['email']).first()
+        print(str(current_user))
+
+        try:
+            data = jwt.decode(token, JWT_SECRET, JWT_ALGORITHM)
+            current_user = User.query.get(gmail=data['email'])
+
+        except:
+            return jsonify({'message': 'token is invalid'})
+
+        return f(current_user, *args, **kwargs)
+
+    return decorator
 @app.route("/info_all", methods=["GET"])
 def info_many():
     filter_value = request.headers.get("filter_value")
     filter_key = request.headers.get("filter_key")
-
+    sort_key = request.headers.get("sort_key")
+    sort_value = request.headers.get("sort_value")
+    less_or_more = request.headers.get('less_or_more')
 
     c = db_con().cursor()
 
@@ -294,6 +325,7 @@ def info_many():
                      "user_colour_id": user_colour.id if user_colour else None,
                      "user_colour": str(user_colour)}
         user_list.append(user_dict)
+# Filter goods
     if filter_value and filter_key:
         try:
             values = [int(filter_value)]
@@ -303,9 +335,56 @@ def info_many():
             values = [filter_value]
             filter_list = [d for d in user_list if d[filter_key] in values]
             return jsonify(str(filter_list))
+# Sort goods
+
+    elif sort_key and sort_value:
+        if less_or_more == "less":
+            sort_list = [d for d in user_list if d[sort_key] <= int(sort_value)]
+            return jsonify(str(sort_list))
+        elif less_or_more == "more":
+            sort_list = [d for d in user_list if d[sort_key] > int(sort_value)]
+            return jsonify(str(sort_list))
     else:
         return jsonify(str(user_list))
 
+
+@app.route("/add_to_basket")
+@token_required
+def add_basket():
+
+    c = db_con().cursor()
+    id_shoes = request.headers.get("id_good")
+    num_record = request.headers.get("num_record")
+    stat = request.headers.get("status")
+
+    customer = current_user.id
+    shoes = Names.query.get(id_shoes)
+
+    colour_id = "SELECT colours_id FROM choose_shoes_2 WHERE names_id = %s"
+    argum = shoes.id
+    c.execute(colour_id, [str(argum)])
+    find_id = c.fetchall()
+    size_id = "SELECT sizes_id FROM choose_shoes WHERE names_id = %s"
+    argums = shoes.id
+    c.execute(size_id, [argums])
+    find_size_id = c.fetchall()
+    user_colour = Colours.query.get(find_id)
+    user_size = Sizes.query.get(find_size_id)
+    basket = Basket(id_record=num_record, id_good=shoes.id, id_colour_shoes=user_colour.id, id_size_shoes=user_size.id,
+                    status=stat, all_summ=shoes.prise, id_customer=customer)
+    db.session.add_all([basket])
+    db.session.commit()
+    return str([basket])
+
+
+
+    # user_dict = {"user_id": user.id,
+    #              "user_name": user.name,
+    #              "user_description": user.description,
+    #              "user_prise": user.prise,
+    #              "user_size": user_size.size,
+    #              "user_colour": user_colour.colour}
+    # return jsonify(str(user_dict))
 
 if __name__ == "__main__":
     app.run(debug=True, port=3000, host="localhost")
